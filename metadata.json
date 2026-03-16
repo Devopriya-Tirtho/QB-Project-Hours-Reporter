@@ -1,0 +1,5 @@
+{
+  "name": "QuickBooks Project Hours Reporter",
+  "description": "Connects securely to QuickBooks Online, lets an authorized user request hours logged for a specific project over a selected date range, generates a clean report, and emails that report automatically.",
+  "requestFramePermissions": []
+}
