@@ -29,7 +29,7 @@ export async function generatePdfReport(reportData: any, filters: any): Promise<
     doc.text(`Billable Hours: ${reportData.summary.billableHours}`);
     doc.text(`Non-Billable Hours: ${reportData.summary.nonBillableHours}`);
     doc.text(`Distinct Employees/Vendors: ${reportData.summary.distinctEmployees}`);
-    doc.text(`Distinct Service Items: ${reportData.summary.distinctServiceItems}`);
+    doc.text(`Distinct Service Types: ${reportData.summary.distinctServiceItems}`);
     doc.moveDown();
 
     // Breakdown by Employee
@@ -39,8 +39,8 @@ export async function generatePdfReport(reportData: any, filters: any): Promise<
     });
     doc.moveDown();
 
-    // Breakdown by Service Item
-    doc.fontSize(16).text('Breakdown by Service Item', { underline: true });
+    // Breakdown by Service Type
+    doc.fontSize(16).text('Breakdown by Service Type', { underline: true });
     reportData.byServiceItem.forEach((item: any) => {
       doc.fontSize(12).text(`${item.name}: ${item.totalHours} hrs`);
     });

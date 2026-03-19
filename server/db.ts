@@ -1,28 +1,21 @@
-import Database from 'better-sqlite3';
+import { initializeApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import path from 'path';
 
-const db = new Database(path.join(process.cwd(), 'database.sqlite'));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const configPath = path.join(__dirname, '../firebase-applet-config.json');
+let firebaseConfig;
+try {
+  firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+} catch (e) {
+  console.error('Failed to load firebase-applet-config.json', e);
+  firebaseConfig = {};
+}
 
-// Initialize tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS qb_tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    realmId TEXT UNIQUE,
-    access_token TEXT,
-    refresh_token TEXT,
-    token_expiry INTEGER,
-    connected_at INTEGER
-  );
-
-  CREATE TABLE IF NOT EXISTS report_history (
-    id TEXT PRIMARY KEY,
-    requested_by TEXT,
-    requested_at INTEGER,
-    filters TEXT,
-    recipient_email TEXT,
-    status TEXT,
-    error_message TEXT
-  );
-`);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export default db;

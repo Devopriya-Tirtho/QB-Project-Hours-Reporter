@@ -1,10 +1,12 @@
 import axios from 'axios';
-import db from './db.js';
+import db from './db.ts';
 import { v4 as uuidv4 } from 'uuid';
+import { doc, setDoc, getDoc, deleteDoc, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
 const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
-const QUICKBOOKS_REDIRECT_URI = process.env.QUICKBOOKS_REDIRECT_URI || `${process.env.APP_URL}/api/qb/callback`;
+const QUICKBOOKS_REDIRECT_URI = process.env.QUICKBOOKS_REDIRECT_URI || 
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/qb/callback` : `${process.env.APP_URL}/api/qb/callback`);
 const ENVIRONMENT = process.env.QUICKBOOKS_ENVIRONMENT || 'sandbox'; // sandbox or production
 
 const OAUTH_URL = ENVIRONMENT === 'sandbox' 
@@ -51,25 +53,26 @@ export async function handleCallback(code: string, realmId: string) {
   const { access_token, refresh_token, expires_in } = response.data;
   const token_expiry = Date.now() + (expires_in * 1000);
 
-  const stmt = db.prepare(`
-    INSERT INTO qb_tokens (realmId, access_token, refresh_token, token_expiry, connected_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(realmId) DO UPDATE SET
-      access_token = excluded.access_token,
-      refresh_token = excluded.refresh_token,
-      token_expiry = excluded.token_expiry,
-      connected_at = excluded.connected_at
-  `);
+  await setDoc(doc(db, 'qb_tokens', realmId), {
+    realmId,
+    access_token,
+    refresh_token,
+    token_expiry,
+    connected_at: Date.now()
+  });
   
-  stmt.run(realmId, access_token, refresh_token, token_expiry, Date.now());
   return { realmId };
 }
 
 export async function getValidToken() {
-  const row = db.prepare('SELECT * FROM qb_tokens ORDER BY connected_at DESC LIMIT 1').get() as any;
-  if (!row) {
+  const q = query(collection(db, 'qb_tokens'), orderBy('connected_at', 'desc'), limit(1));
+  const snapshot = await getDocs(q);
+  
+  if (snapshot.empty) {
     throw new Error('QuickBooks not connected');
   }
+
+  const row = snapshot.docs[0].data() as any;
 
   if (Date.now() >= row.token_expiry - 60000) { // Refresh 1 min before expiry
     const authHeader = Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString('base64');
@@ -90,12 +93,13 @@ export async function getValidToken() {
       const { access_token, refresh_token, expires_in } = response.data;
       const token_expiry = Date.now() + (expires_in * 1000);
 
-      const stmt = db.prepare(`
-        UPDATE qb_tokens 
-        SET access_token = ?, refresh_token = ?, token_expiry = ?
-        WHERE realmId = ?
-      `);
-      stmt.run(access_token, refresh_token, token_expiry, row.realmId);
+      await setDoc(doc(db, 'qb_tokens', row.realmId), {
+        realmId: row.realmId,
+        access_token,
+        refresh_token,
+        token_expiry,
+        connected_at: row.connected_at
+      });
 
       return { access_token, realmId: row.realmId };
     } catch (error: any) {
@@ -103,7 +107,7 @@ export async function getValidToken() {
       
       if (error.response?.data?.error === 'invalid_grant') {
         // Token is invalid, force reconnection
-        db.prepare('DELETE FROM qb_tokens WHERE realmId = ?').run(row.realmId);
+        await deleteDoc(doc(db, 'qb_tokens', row.realmId));
         throw new Error('QuickBooks session expired. Please reconnect.');
       }
       
@@ -220,9 +224,6 @@ export async function getEmployeesAndVendors() {
 }
 
 export async function fetchTimeActivities(filters: any) {
-  let query = "SELECT * FROM TimeActivity WHERE 1=1";
-  
-  // QuickBooks doesn't support 1=1 in WHERE clauses. Let's build it properly.
   let conditions = [];
 
   if (filters.startDate) {
@@ -244,14 +245,30 @@ export async function fetchTimeActivities(filters: any) {
     conditions.push(`ItemRef = '${filters.itemRef}'`);
   }
   
-  query = "SELECT * FROM TimeActivity";
+  let baseQuery = "SELECT * FROM TimeActivity";
   if (conditions.length > 0) {
-    query += " WHERE " + conditions.join(" AND ");
+    baseQuery += " WHERE " + conditions.join(" AND ");
   }
-  query += " MAXRESULTS 500";
   
-  const result = await queryQuickBooks(query);
-  return result.QueryResponse.TimeActivity || [];
+  let allActivities: any[] = [];
+  let startPosition = 1;
+  const maxResults = 500;
+  let fetchMore = true;
+
+  while (fetchMore) {
+    const query = `${baseQuery} STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+    const result = await queryQuickBooks(query);
+    const activities = result.QueryResponse.TimeActivity || [];
+    allActivities = allActivities.concat(activities);
+
+    if (activities.length < maxResults) {
+      fetchMore = false;
+    } else {
+      startPosition += maxResults;
+    }
+  }
+  
+  return allActivities;
 }
 
 export function normalizeTimeActivities(rawRows: any[]) {
@@ -269,8 +286,8 @@ export function normalizeTimeActivities(rawRows: any[]) {
       employeeName: row.EmployeeRef?.name,
       vendorRef: row.VendorRef?.value,
       vendorName: row.VendorRef?.name,
-      customerRef: row.CustomerRef?.value,
-      customerName: row.CustomerRef?.name,
+      customerRef: row.ProjectRef?.value || row.CustomerRef?.value,
+      customerName: row.ProjectRef?.name || row.CustomerRef?.name,
       itemRef: row.ItemRef?.value,
       itemName: row.ItemRef?.name,
       classRef: row.ClassRef?.value,

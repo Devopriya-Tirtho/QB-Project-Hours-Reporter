@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Mail, RefreshCw, FileText, FileSpreadsheet, Send, Search, Calendar, User, CheckCircle2, AlertCircle, MessageSquare } from 'lucide-react';
+import { Download, Mail, RefreshCw, FileText, FileSpreadsheet, Send, Search, Calendar, User, CheckCircle2, AlertCircle, MessageSquare, Activity } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
+import OverviewReport from './components/OverviewReport';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -19,7 +20,6 @@ export default function App() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [recipientEmail, setRecipientEmail] = useState('');
   const [formats, setFormats] = useState(['pdf', 'csv']);
   const [generating, setGenerating] = useState(false);
   const [history, setHistory] = useState([]);
@@ -30,6 +30,13 @@ export default function App() {
   const [assistantQuery, setAssistantQuery] = useState('');
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantMessages, setAssistantMessages] = useState<{role: 'user' | 'assistant', text: string}[]>([]);
+
+  // Overview state
+  const [overviewData, setOverviewData] = useState<any>(null);
+  const [loadingOverview, setLoadingOverview] = useState(false);
+
+  // Logo state
+  const [logoError, setLogoError] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -73,13 +80,73 @@ export default function App() {
     }
   }, [searchQuery, allProjects]);
 
+  useEffect(() => {
+    if (selectedProject && startDate && endDate) {
+      fetchOverview();
+    } else {
+      setOverviewData(null);
+    }
+  }, [selectedProject, startDate, endDate]);
+
+  const fetchOverview = async () => {
+    setLoadingOverview(true);
+    try {
+      const filters = {
+        customerRef: selectedProject?.id,
+        projectName: selectedProject?.name,
+        startDate,
+        endDate
+      };
+      const res = await fetch('/api/reports/overview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filters })
+      });
+      if (!res.ok) throw new Error('Failed to fetch overview');
+      const data = await res.json();
+      setOverviewData(data);
+    } catch (err) {
+      console.error(err);
+      setOverviewData(null);
+    } finally {
+      setLoadingOverview(false);
+    }
+  };
+
+  const applyDatePreset = (preset: 'thisWeek' | 'lastWeek' | 'thisMonth') => {
+    const today = new Date();
+    let start = new Date();
+    let end = new Date();
+
+    if (preset === 'thisWeek') {
+      const day = today.getDay();
+      const diff = today.getDate() - day + (day === 0 ? -6 : 1);
+      start = new Date(today.setDate(diff));
+      end = new Date(start);
+      end.setDate(start.getDate() + 6);
+    } else if (preset === 'lastWeek') {
+      const day = today.getDay();
+      const diff = today.getDate() - day + (day === 0 ? -6 : 1) - 7;
+      start = new Date(today.setDate(diff));
+      end = new Date(start);
+      end.setDate(start.getDate() + 6);
+    } else if (preset === 'thisMonth') {
+      start = new Date(today.getFullYear(), today.getMonth(), 1);
+      end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    }
+
+    setStartDate(start.toISOString().split('T')[0]);
+    setEndDate(end.toISOString().split('T')[0]);
+  };
+
   const checkConnection = async () => {
     try {
       const res = await fetch('/api/qb/status');
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       setConnected(data.connected);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to check connection:', err);
     } finally {
       setLoading(false);
     }
@@ -87,18 +154,20 @@ export default function App() {
 
   const fetchAllProjects = async () => {
     try {
-      const res = await fetch(`/api/qb/projects`);
+      const res = await fetch(`/api/projects`);
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       setAllProjects(data);
       setFilteredProjects(data);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to fetch projects:', err);
     }
   };
 
   const fetchHistory = async () => {
     try {
       const res = await fetch('/api/reports/history');
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setHistory(data);
@@ -107,7 +176,7 @@ export default function App() {
         setHistory([]);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Failed to fetch history:', err);
       setHistory([]);
     }
   };
@@ -115,7 +184,7 @@ export default function App() {
   const handleConnect = () => {
     const origin = window.location.origin;
     const authWindow = window.open(
-      `${origin}/api/qb/auth`,
+      `${origin}/api/qb/connect`,
       'oauth_popup',
       'width=600,height=700'
     );
@@ -134,10 +203,6 @@ export default function App() {
       showToast('error', 'Please select at least a project or date range.');
       return;
     }
-    if (!recipientEmail) {
-      showToast('error', 'Please enter a recipient email.');
-      return;
-    }
 
     setGenerating(true);
     try {
@@ -148,16 +213,25 @@ export default function App() {
         endDate
       };
 
-      const res = await fetch('/api/reports/generate', {
+      const res = await fetch('/api/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filters, recipientEmail, formats })
+        body: JSON.stringify({ filters, formats })
       });
 
-      const data = await res.json();
+      let data;
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        console.error('Non-JSON response:', text);
+        throw new Error(`Server returned an unexpected response (${res.status}). Please try again later.`);
+      }
+
       if (!res.ok) throw new Error(data.error || 'Failed to generate report');
 
-      showToast('success', 'Report generated and emailed successfully!');
+      showToast('success', 'Report generated and downloaded successfully!');
       fetchHistory();
       
       // Trigger downloads if requested
@@ -196,7 +270,6 @@ export default function App() {
         - projectName (string)
         - startDate (YYYY-MM-DD)
         - endDate (YYYY-MM-DD)
-        - recipientEmail (string)
         
         Current Date: ${new Date().toISOString().split('T')[0]}
         
@@ -228,12 +301,8 @@ export default function App() {
         setEndDate(filters.endDate);
         reply += `- End Date: ${filters.endDate}\n`;
       }
-      if (filters.recipientEmail) {
-        setRecipientEmail(filters.recipientEmail);
-        reply += `- Email: ${filters.recipientEmail}\n`;
-      }
 
-      reply += '\nPlease review the form and click "Generate and Send Report" when ready.';
+      reply += '\nPlease review the form and click "Generate and Download Report" when ready.';
       
       setAssistantMessages(prev => [...prev, { role: 'assistant', text: reply }]);
     } catch (err) {
@@ -245,18 +314,30 @@ export default function App() {
   };
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><RefreshCw className="w-8 h-8 animate-spin text-indigo-600" /></div>;
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><RefreshCw className="w-8 h-8 animate-spin text-brand-primary" /></div>;
   }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-lg">
-            <FileText className="w-6 h-6 text-white" />
-          </div>
-          <h1 className="text-xl font-semibold text-slate-800">QuickBooks Project Hours Reporter</h1>
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-4">
+          {/* Logo */}
+          {!logoError ? (
+            <img
+              src="https://drive.google.com/uc?export=view&id=1FGLRFIqBPSlCXzB8tFcEFY08J5RJ9DWc"
+              alt="Morris Interactive"
+              className="h-10 sm:h-12 w-auto object-contain p-1"
+              onError={() => setLogoError(true)}
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="h-10 sm:h-12 flex items-center justify-center font-bold text-brand-primary text-lg px-2">
+              Morris Interactive
+            </div>
+          )}
+          <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
+          <h1 className="text-xl font-semibold text-brand-primary hidden sm:block">QuickBooks Project Hours Reporter</h1>
         </div>
         <div className="flex items-center gap-4">
           {connected ? (
@@ -267,7 +348,7 @@ export default function App() {
           ) : (
             <button
               onClick={handleConnect}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-brand-primary hover:bg-brand-primary/90 text-white text-sm font-medium rounded-md transition-colors"
             >
               <RefreshCw className="w-4 h-4" />
               Connect QuickBooks
@@ -301,7 +382,7 @@ export default function App() {
                     }}
                     onFocus={() => setIsDropdownOpen(true)}
                     placeholder="Search projects..."
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
                     disabled={!connected}
                   />
                   <Search className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
@@ -331,43 +412,34 @@ export default function App() {
               </div>
 
               {/* Dates */}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Start Date</label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  />
-                  <Calendar className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  />
-                  <Calendar className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
-                </div>
-              </div>
-
-              {/* Email */}
               <div className="col-span-full">
-                <label className="block text-sm font-medium text-slate-700 mb-1">Recipient Email</label>
-                <div className="relative">
-                  <input
-                    type="email"
-                    value={recipientEmail}
-                    onChange={(e) => setRecipientEmail(e.target.value)}
-                    placeholder="manager@example.com"
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  />
-                  <Mail className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-slate-700">Date Range</label>
+                  <div className="flex gap-2">
+                    <button onClick={() => applyDatePreset('thisWeek')} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors">This Week</button>
+                    <button onClick={() => applyDatePreset('lastWeek')} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors">Last Week</button>
+                    <button onClick={() => applyDatePreset('thisMonth')} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition-colors">This Month</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="relative">
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
+                    />
+                    <Calendar className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
+                    />
+                    <Calendar className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" />
+                  </div>
                 </div>
               </div>
 
@@ -383,7 +455,7 @@ export default function App() {
                         if (e.target.checked) setFormats([...formats, 'pdf']);
                         else setFormats(formats.filter(f => f !== 'pdf'));
                       }}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
+                      className="rounded text-brand-primary focus:ring-brand-primary"
                     />
                     <FileText className="w-4 h-4 text-slate-500" />
                     <span className="text-sm">PDF Summary</span>
@@ -396,7 +468,7 @@ export default function App() {
                         if (e.target.checked) setFormats([...formats, 'csv']);
                         else setFormats(formats.filter(f => f !== 'csv'));
                       }}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
+                      className="rounded text-brand-primary focus:ring-brand-primary"
                     />
                     <FileSpreadsheet className="w-4 h-4 text-slate-500" />
                     <span className="text-sm">CSV Details</span>
@@ -409,13 +481,23 @@ export default function App() {
               <button
                 onClick={handleGenerate}
                 disabled={!connected || generating}
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium rounded-md transition-colors shadow-sm"
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-brand-primary hover:bg-brand-primary/90 disabled:bg-brand-primary/50 text-white font-medium rounded-md transition-colors shadow-sm"
               >
-                {generating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                Generate and Send Report
+                {generating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                Generate and Download Report
               </button>
             </div>
           </div>
+
+          {/* Overview Report Section */}
+          {loadingOverview ? (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 flex flex-col items-center justify-center text-slate-500">
+              <RefreshCw className="w-8 h-8 animate-spin text-brand-primary mb-4" />
+              <p>Loading overview data...</p>
+            </div>
+          ) : overviewData ? (
+            <OverviewReport data={overviewData} />
+          ) : null}
 
           {/* History Table */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
@@ -426,14 +508,13 @@ export default function App() {
                   <tr>
                     <th className="px-4 py-3">Date</th>
                     <th className="px-4 py-3">Filters</th>
-                    <th className="px-4 py-3">Recipient</th>
                     <th className="px-4 py-3">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {history.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-slate-500">No reports generated yet.</td>
+                      <td colSpan={3} className="px-4 py-8 text-center text-slate-500">No reports generated yet.</td>
                     </tr>
                   ) : (
                     history.map((item: any) => {
@@ -447,7 +528,6 @@ export default function App() {
                               <span className="text-xs text-slate-500">{filters.startDate || 'Any'} to {filters.endDate || 'Any'}</span>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-slate-600">{item.recipient_email}</td>
                           <td className="px-4 py-3">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                               item.status === 'Success' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
@@ -469,14 +549,14 @@ export default function App() {
         <div className="lg:col-span-4">
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-[600px] flex flex-col">
             <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-xl flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-indigo-600" />
+              <MessageSquare className="w-5 h-5 text-brand-secondary" />
               <h2 className="font-semibold text-slate-800">AI Assistant</h2>
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              <div className="bg-indigo-50 text-indigo-900 p-3 rounded-lg rounded-tl-none text-sm">
+              <div className="bg-brand-secondary/10 text-brand-secondary p-3 rounded-lg rounded-tl-none text-sm">
                 Hi! I can help you fill out the report form. Try asking: <br/><br/>
-                "Generate a report for Project Alpha from Jan 1 to Jan 31 and send it to boss@example.com"
+                "Generate a report for Project Alpha from Jan 1 to Jan 31"
               </div>
               
               {assistantMessages.map((msg, idx) => (
@@ -484,7 +564,7 @@ export default function App() {
                   <div className={`max-w-[85%] p-3 rounded-lg text-sm whitespace-pre-wrap ${
                     msg.role === 'user' 
                       ? 'bg-slate-800 text-white rounded-tr-none' 
-                      : 'bg-indigo-50 text-indigo-900 rounded-tl-none'
+                      : 'bg-brand-secondary/10 text-brand-secondary rounded-tl-none'
                   }`}>
                     {msg.text}
                   </div>
@@ -492,7 +572,7 @@ export default function App() {
               ))}
               {assistantLoading && (
                 <div className="flex justify-start">
-                  <div className="bg-indigo-50 text-indigo-900 p-3 rounded-lg rounded-tl-none text-sm flex items-center gap-2">
+                  <div className="bg-brand-secondary/10 text-brand-secondary p-3 rounded-lg rounded-tl-none text-sm flex items-center gap-2">
                     <RefreshCw className="w-4 h-4 animate-spin" /> Thinking...
                   </div>
                 </div>
@@ -506,13 +586,13 @@ export default function App() {
                   value={assistantQuery}
                   onChange={(e) => setAssistantQuery(e.target.value)}
                   placeholder="Ask me to set up a report..."
-                  className="w-full pl-4 pr-10 py-2 border border-slate-300 rounded-full focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                  className="w-full pl-4 pr-10 py-2 border border-slate-300 rounded-full focus:ring-2 focus:ring-brand-secondary focus:border-brand-secondary text-sm"
                   disabled={assistantLoading}
                 />
                 <button 
                   type="submit"
                   disabled={assistantLoading || !assistantQuery.trim()}
-                  className="absolute right-2 top-1.5 p-1 text-indigo-600 hover:bg-indigo-50 rounded-full disabled:opacity-50"
+                  className="absolute right-2 top-1.5 p-1 text-brand-secondary hover:bg-brand-secondary/10 rounded-full disabled:opacity-50"
                 >
                   <Send className="w-4 h-4" />
                 </button>

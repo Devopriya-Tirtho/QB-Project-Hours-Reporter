@@ -38,7 +38,32 @@ FROM_EMAIL="your_email@gmail.com"
 5. Enter the recipient email address.
 6. Click **Generate and Send Report**.
 
-### 4. Features
+### 4. Deploy to Vercel
+
+This app is fully configured for deployment on Vercel using Serverless Functions.
+
+**Deployment Steps:**
+1. Push your code to a GitHub repository.
+2. Import the repository into Vercel.
+3. Vercel will automatically detect the Vite frontend and configure the build settings.
+4. Add the following **Environment Variables** in your Vercel project settings before deploying:
+   - `QUICKBOOKS_CLIENT_ID`
+   - `QUICKBOOKS_CLIENT_SECRET`
+   - `QUICKBOOKS_ENVIRONMENT` (e.g., `production` or `sandbox`)
+   - `FIREBASE_PROJECT_ID` (from your Firebase project settings)
+   - `FIREBASE_CLIENT_EMAIL` (from your Firebase service account)
+   - `FIREBASE_PRIVATE_KEY` (from your Firebase service account, ensure you include `\n` for newlines)
+   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `FROM_EMAIL` (if using email features)
+   
+   *Note: You do NOT need to set `QUICKBOOKS_REDIRECT_URI` or `APP_URL` on Vercel. The app automatically uses the `VERCEL_URL` environment variable to construct the correct callback URL (e.g., `https://your-app.vercel.app/api/qb/callback`).*
+
+5. **QuickBooks Setup:** Once deployed, copy your Vercel domain (e.g., `https://your-app.vercel.app/api/qb/callback`) and add it as a valid Redirect URI in your Intuit Developer Dashboard.
+6. **Firebase Setup:** The app uses the Firebase Admin SDK on the server side to securely store QuickBooks tokens. Ensure your Firebase Service Account credentials are correct. No client-side Firebase configuration is required, and end-users do not need to log in to Firebase.
+
+**Known Limitations:**
+- Vercel Serverless Functions have a 10-second execution limit on the free tier (Hobby). If your QuickBooks project has a massive amount of time entries, the report generation might time out. The app includes a 15-second timeout on QuickBooks API calls to fail gracefully.
+
+### 5. Features
 - **OAuth 2.0**: Securely connects to QuickBooks and automatically refreshes tokens.
 - **Reporting**: Generates PDF summaries and CSV detailed line items.
 - **Email**: Automatically emails the generated reports.

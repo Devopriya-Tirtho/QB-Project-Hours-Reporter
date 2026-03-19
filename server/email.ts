@@ -24,6 +24,9 @@ export async function sendReportEmail(
         user: SMTP_USER,
         pass: SMTP_PASS,
       },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
     });
   } else {
     // Mock for development if no credentials
@@ -46,8 +49,8 @@ export async function sendReportEmail(
   try {
     const info = await transporter.sendMail(mailOptions);
     console.log('Message sent: %s', info.messageId);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error sending email:', error);
-    throw new Error('Failed to send email report.');
+    throw new Error(`Failed to send email report: ${error.message || 'Unknown error'}`);
   }
 }

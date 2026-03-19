@@ -1,6 +1,6 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db from './db.js';
+import db from './db.ts';
 import {
   getAuthUri,
   handleCallback,
@@ -10,13 +10,17 @@ import {
   normalizeTimeActivities,
   aggregateProjectHours,
   getValidToken
-} from './quickbooks.js';
-import { generatePdfReport, generateCsvReport } from './reports.js';
-import { sendReportEmail } from './email.js';
+} from './quickbooks.ts';
+import { generatePdfReport, generateCsvReport } from './reports.ts';
 
 const router = express.Router();
 
 router.get('/qb/auth', (req, res) => {
+  const url = getAuthUri();
+  res.redirect(url);
+});
+
+router.get('/qb/connect', (req, res) => {
   const url = getAuthUri();
   res.redirect(url);
 });
@@ -31,7 +35,7 @@ router.get('/qb/callback', async (req, res) => {
   }
 
   try {
-    await handleCallback(code as string, realmId as string);
+    const { realmId: newRealmId } = await handleCallback(code as string, realmId as string);
     res.send(`
       <html><body>
         <script>
@@ -48,8 +52,10 @@ router.get('/qb/callback', async (req, res) => {
 
 router.get('/qb/status', async (req, res) => {
   try {
-    const row = db.prepare('SELECT connected_at FROM qb_tokens ORDER BY connected_at DESC LIMIT 1').get() as any;
-    if (row) {
+    const snapshot = await db.collection('qb_tokens').orderBy('connected_at', 'desc').limit(1).get();
+    
+    if (!snapshot.empty) {
+      const row = snapshot.docs[0].data();
       // Test token validity
       await getValidToken();
       res.json({ connected: true, connectedAt: row.connected_at });
@@ -70,6 +76,15 @@ router.get('/qb/projects', async (req, res) => {
   }
 });
 
+router.get('/projects', async (req, res) => {
+  try {
+    const projects = await getAllProjects();
+    res.json(projects);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/qb/employees', async (req, res) => {
   try {
     const { employees, vendors } = await getEmployeesAndVendors();
@@ -82,8 +97,124 @@ router.get('/qb/employees', async (req, res) => {
   }
 });
 
-router.post('/reports/generate', async (req, res) => {
-  const { filters, recipientEmail, formats } = req.body;
+router.post('/reports/overview', async (req, res) => {
+  const { filters } = req.body;
+  try {
+    const rawData = await fetchTimeActivities(filters);
+    if (!rawData || rawData.length === 0) {
+      return res.json({ 
+        status: 'No activity', 
+        hoursByMember: [], 
+        dailyActivity: [], 
+        missingEntries: [], 
+        recentActivity: [] 
+      });
+    }
+
+    const normalized = normalizeTimeActivities(rawData);
+    
+    // Status
+    const totalHours = normalized.reduce((sum, row) => sum + row.decimal_hours, 0);
+    let status = 'Active';
+    if (totalHours === 0) status = 'No activity';
+    else if (totalHours < 10) status = 'Low activity';
+
+    // Hours by Team Member
+    const memberMap = new Map();
+    normalized.forEach(row => {
+      const name = row.employeeName || row.vendorName || 'Unknown';
+      memberMap.set(name, (memberMap.get(name) || 0) + row.decimal_hours);
+    });
+    const hoursByMember = Array.from(memberMap.entries())
+      .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(2)) }))
+      .sort((a, b) => b.hours - a.hours);
+
+    // Daily Activity
+    const dailyMap = new Map();
+    // Initialize all days in range if startDate and endDate are provided
+    if (filters.startDate && filters.endDate) {
+      let curr = new Date(filters.startDate);
+      const end = new Date(filters.endDate);
+      while (curr <= end) {
+        dailyMap.set(curr.toISOString().split('T')[0], 0);
+        curr.setDate(curr.getDate() + 1);
+      }
+    }
+    normalized.forEach(row => {
+      if (row.txnDate) {
+        const dateStr = row.txnDate.split('T')[0];
+        dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + row.decimal_hours);
+      }
+    });
+    const dailyActivity = Array.from(dailyMap.entries())
+      .map(([date, hours]) => ({ date, hours: Number(hours.toFixed(2)) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const maxDailyHours = Math.max(...dailyActivity.map(d => d.hours), 8);
+
+    // Recent Activity Snapshot
+    const recentActivity = [...normalized]
+      .sort((a, b) => new Date(b.txnDate || 0).getTime() - new Date(a.txnDate || 0).getTime())
+      .slice(0, 10)
+      .map(row => ({
+        date: row.txnDate ? row.txnDate.split('T')[0] : 'Unknown',
+        name: row.employeeName || row.vendorName || 'Unknown',
+        hours: row.decimal_hours,
+        description: row.description
+      }));
+
+    // Missing Time Entries: Find employees who logged time in the past 30 days but not in the selected date range
+    const missingEntries: any[] = [];
+    try {
+      if (filters.startDate) {
+        const thirtyDaysAgo = new Date(filters.startDate);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const historicalFilters = {
+          ...filters,
+          startDate: thirtyDaysAgo.toISOString().split('T')[0],
+          endDate: filters.startDate
+        };
+        
+        const historicalData = await fetchTimeActivities(historicalFilters);
+        if (historicalData && historicalData.length > 0) {
+          const historicalNormalized = normalizeTimeActivities(historicalData);
+          const historicalWorkers = new Set(
+            historicalNormalized.map(row => row.employeeName || row.vendorName || 'Unknown')
+          );
+          
+          // Remove workers who HAVE logged time in the current period
+          const currentWorkers = new Set(hoursByMember.map(m => m.name));
+          
+          historicalWorkers.forEach(worker => {
+            if (!currentWorkers.has(worker) && worker !== 'Unknown') {
+              missingEntries.push({
+                name: worker,
+                reason: 'Logged time recently, but no hours in this period.'
+              });
+            }
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to calculate missing entries:', e);
+    }
+
+    res.json({
+      status,
+      hoursByMember,
+      dailyActivity,
+      maxDailyHours,
+      missingEntries,
+      recentActivity
+    });
+  } catch (err: any) {
+    console.error('Overview generation error:', err);
+    res.status(500).json({ error: err?.message || 'Internal Server Error' });
+  }
+});
+
+const generateReportHandler = async (req: express.Request, res: express.Response) => {
+  const { filters, formats } = req.body;
   const reportId = uuidv4();
   
   try {
@@ -98,49 +229,24 @@ router.post('/reports/generate', async (req, res) => {
     const aggregated = aggregateProjectHours(normalized);
 
     // 3. Generate reports
-    const attachments = [];
     let pdfBuffer, csvString;
 
     if (formats.includes('pdf')) {
       pdfBuffer = await generatePdfReport(aggregated, filters);
-      attachments.push({
-        filename: `Project_Hours_${filters.projectName || 'Report'}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
-      });
     }
 
     if (formats.includes('csv')) {
       csvString = generateCsvReport(aggregated);
-      attachments.push({
-        filename: `Project_Hours_${filters.projectName || 'Report'}.csv`,
-        content: csvString,
-        contentType: 'text/csv'
-      });
     }
 
-    // 4. Send email
-    const subject = `Project Hours Report - ${filters.projectName || 'All'} - ${filters.startDate || 'Any'} to ${filters.endDate || 'Any'}`;
-    const body = `
-      Project Hours Report Summary
-      ----------------------------
-      Project: ${filters.projectName || 'All'}
-      Date Range: ${filters.startDate || 'Any'} to ${filters.endDate || 'Any'}
-      Total Hours: ${aggregated.summary.totalHours}
-      Billable Hours: ${aggregated.summary.billableHours}
-      Non-Billable Hours: ${aggregated.summary.nonBillableHours}
-      
-      Please find the detailed report attached.
-    `;
-
-    await sendReportEmail(recipientEmail, subject, body, attachments);
-
-    // 5. Log history
-    const stmt = db.prepare(`
-      INSERT INTO report_history (id, requested_by, requested_at, filters, recipient_email, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(reportId, 'User', Date.now(), JSON.stringify(filters), recipientEmail, 'Success');
+    // 4. Log history
+    await db.collection('report_history').doc(reportId).set({
+      id: reportId,
+      requested_by: 'User',
+      requested_at: Date.now(),
+      filters: JSON.stringify(filters || {}),
+      status: 'Success'
+    });
 
     res.json({ 
       success: true, 
@@ -152,23 +258,38 @@ router.post('/reports/generate', async (req, res) => {
 
   } catch (err: any) {
     console.error('Report generation error:', err);
-    const stmt = db.prepare(`
-      INSERT INTO report_history (id, requested_by, requested_at, filters, recipient_email, status, error_message)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(reportId, 'User', Date.now(), JSON.stringify(filters), recipientEmail, 'Failed', err.message);
+    try {
+      await db.collection('report_history').doc(reportId).set({
+        id: reportId,
+        requested_by: 'User',
+        requested_at: Date.now(),
+        filters: JSON.stringify(filters || {}),
+        status: 'Failed',
+        error_message: err?.message || String(err) || 'Unknown error'
+      });
+    } catch (dbErr) {
+      console.error('Failed to log error to db:', dbErr);
+    }
 
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err?.message || 'Internal Server Error' });
   }
-});
+};
 
-router.get('/reports/history', (req, res) => {
+router.post('/reports/generate', generateReportHandler);
+router.post('/report', generateReportHandler);
+
+router.get('/reports/history', async (req, res) => {
   try {
-    const rows = db.prepare('SELECT * FROM report_history ORDER BY requested_at DESC LIMIT 50').all();
+    const snapshot = await db.collection('report_history').orderBy('requested_at', 'desc').limit(50).get();
+    const rows = snapshot.docs.map(doc => doc.data());
     res.json(rows);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/health', (req, res) => {
+  res.json({ status: 'ok', environment: process.env.VERCEL_URL ? 'vercel' : 'local' });
 });
 
 export default router;
