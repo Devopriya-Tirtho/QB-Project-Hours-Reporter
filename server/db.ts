@@ -1,5 +1,4 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import admin from 'firebase-admin';
 import fs from 'fs';
 import path from 'path';
 
@@ -20,32 +19,39 @@ try {
 }
 
 // Fallback to env vars if config file is missing
-if (!firebaseConfig.projectId && process.env.FIREBASE_PROJECT_ID) {
-  firebaseConfig = {
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    apiKey: process.env.FIREBASE_API_KEY,
-    appId: process.env.FIREBASE_APP_ID,
-    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-    firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID
-  };
+const projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || (process.env.FIREBASE_CLIENT_EMAIL ? process.env.FIREBASE_CLIENT_EMAIL.split('@')[1].split('.')[0] : 'dummy-project-id');
+
+if (!admin.apps.length) {
+  try {
+    if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: projectId,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        }),
+      });
+    } else {
+      admin.initializeApp({
+        projectId: projectId,
+      });
+    }
+  } catch (error) {
+    console.error('Firebase Admin Initialization Error:', error);
+    // Fallback initialize to prevent complete crash
+    if (!admin.apps.length) {
+      admin.initializeApp({ projectId: 'dummy-project-id' });
+    }
+  }
 }
 
-if (!firebaseConfig.projectId) {
-  console.warn('Firebase configuration is missing. Please provide a valid firebase-applet-config.json or set FIREBASE_PROJECT_ID environment variable.');
-  // Provide a dummy config so initializeApp doesn't crash the whole serverless function
-  firebaseConfig = {
-    projectId: 'dummy-project-id',
-    apiKey: 'dummy-api-key',
-    appId: 'dummy-app-id'
-  };
+const db = admin.firestore();
+if (process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId) {
+  try {
+    db.settings({ databaseId: process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId });
+  } catch (e) {
+    console.warn('Could not set databaseId, it might already be initialized or not supported in this admin SDK version.', e);
+  }
 }
-
-const app = initializeApp(firebaseConfig);
-
-const databaseId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId;
-
-const db = databaseId 
-  ? getFirestore(app, databaseId) 
-  : getFirestore(app);
 
 export default db;

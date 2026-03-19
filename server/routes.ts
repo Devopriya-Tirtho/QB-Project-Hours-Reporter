@@ -1,7 +1,6 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import db from './db';
-import { collection, doc, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import {
   getAuthUri,
   handleCallback,
@@ -54,8 +53,7 @@ router.get('/qb/callback', async (req, res) => {
 
 router.get('/qb/status', async (req, res) => {
   try {
-    const q = query(collection(db, 'qb_tokens'), orderBy('connected_at', 'desc'), limit(1));
-    const snapshot = await getDocs(q);
+    const snapshot = await db.collection('qb_tokens').orderBy('connected_at', 'desc').limit(1).get();
     
     if (!snapshot.empty) {
       const row = snapshot.docs[0].data();
@@ -244,7 +242,7 @@ router.post('/reports/generate', async (req, res) => {
     }
 
     // 4. Log history
-    await setDoc(doc(db, 'report_history', reportId), {
+    await db.collection('report_history').doc(reportId).set({
       id: reportId,
       requested_by: 'User',
       requested_at: Date.now(),
@@ -263,7 +261,7 @@ router.post('/reports/generate', async (req, res) => {
   } catch (err: any) {
     console.error('Report generation error:', err);
     try {
-      await setDoc(doc(db, 'report_history', reportId), {
+      await db.collection('report_history').doc(reportId).set({
         id: reportId,
         requested_by: 'User',
         requested_at: Date.now(),
@@ -307,7 +305,7 @@ router.post('/report', async (req, res) => {
     }
 
     // 4. Log history
-    await setDoc(doc(db, 'report_history', reportId), {
+    await db.collection('report_history').doc(reportId).set({
       id: reportId,
       requested_by: 'User',
       requested_at: Date.now(),
@@ -326,7 +324,7 @@ router.post('/report', async (req, res) => {
   } catch (err: any) {
     console.error('Report generation error:', err);
     try {
-      await setDoc(doc(db, 'report_history', reportId), {
+      await db.collection('report_history').doc(reportId).set({
         id: reportId,
         requested_by: 'User',
         requested_at: Date.now(),
@@ -344,8 +342,7 @@ router.post('/report', async (req, res) => {
 
 router.get('/reports/history', async (req, res) => {
   try {
-    const q = query(collection(db, 'report_history'), orderBy('requested_at', 'desc'), limit(50));
-    const snapshot = await getDocs(q);
+    const snapshot = await db.collection('report_history').orderBy('requested_at', 'desc').limit(50).get();
     const rows = snapshot.docs.map(doc => doc.data());
     res.json(rows);
   } catch (err: any) {
