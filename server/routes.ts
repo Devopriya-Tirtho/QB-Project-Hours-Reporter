@@ -136,7 +136,7 @@ router.post('/reports/overview', async (req, res) => {
     // Daily Activity
     const dailyMap = new Map();
     // Initialize all days in range if startDate and endDate are provided
-    if (filters.startDate && filters.endDate) {
+    if (filters && filters.startDate && filters.endDate) {
       let curr = new Date(filters.startDate);
       const end = new Date(filters.endDate);
       while (curr <= end) {
@@ -169,7 +169,7 @@ router.post('/reports/overview', async (req, res) => {
     // Missing Time Entries: Find employees who logged time in the past 30 days but not in the selected date range
     const missingEntries: any[] = [];
     try {
-      if (filters.startDate) {
+      if (filters && filters.startDate) {
         const thirtyDaysAgo = new Date(filters.startDate);
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         
@@ -235,11 +235,11 @@ router.post('/reports/generate', async (req, res) => {
     // 3. Generate reports
     let pdfBuffer, csvString;
 
-    if (formats.includes('pdf')) {
+    if (formats && formats.includes('pdf')) {
       pdfBuffer = await generatePdfReport(aggregated, filters);
     }
 
-    if (formats.includes('csv')) {
+    if (formats && formats.includes('csv')) {
       csvString = generateCsvReport(aggregated);
     }
 
@@ -298,11 +298,11 @@ router.post('/report', async (req, res) => {
     // 3. Generate reports
     let pdfBuffer, csvString;
 
-    if (formats.includes('pdf')) {
+    if (formats && formats.includes('pdf')) {
       pdfBuffer = await generatePdfReport(aggregated, filters);
     }
 
-    if (formats.includes('csv')) {
+    if (formats && formats.includes('csv')) {
       csvString = generateCsvReport(aggregated);
     }
 
