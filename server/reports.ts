@@ -1,9 +1,8 @@
-import PDFDocument from 'pdfkit';
-import { Parser } from 'json2csv';
 import fs from 'fs';
 import path from 'path';
 
 export async function generatePdfReport(reportData: any, filters: any): Promise<Buffer> {
+  const PDFDocument = (await import('pdfkit')).default;
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 });
     const buffers: Buffer[] = [];
@@ -65,7 +64,9 @@ export async function generatePdfReport(reportData: any, filters: any): Promise<
   });
 }
 
-export function generateCsvReport(reportData: any): string {
+export async function generateCsvReport(reportData: any): Promise<string> {
+  const json2csv = await import('json2csv');
+  const Parser = json2csv.default ? json2csv.default.Parser : json2csv.Parser;
   const fields = [
     'txnDate',
     'employeeName',

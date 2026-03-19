@@ -1,26 +1,22 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import path from 'path';
-import { createRequire } from 'module';
 
-const require = createRequire(import.meta.url);
 let firebaseConfig: any = {};
 try {
-  firebaseConfig = require('../firebase-applet-config.json');
-} catch (e) {
-  console.error('Failed to load firebase-applet-config.json via require', e);
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const configPath = path.join(__dirname, '../firebase-applet-config.json');
-    if (fs.existsSync(configPath)) {
-      firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  const cwdConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(cwdConfigPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(cwdConfigPath, 'utf-8'));
+  } else {
+    // Try one level up just in case
+    const parentConfigPath = path.join(process.cwd(), '../firebase-applet-config.json');
+    if (fs.existsSync(parentConfigPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(parentConfigPath, 'utf-8'));
     }
-  } catch (err) {
-    console.error('Failed to load firebase-applet-config.json via fs', err);
   }
+} catch (err) {
+  console.error('Failed to load firebase-applet-config.json via fs', err);
 }
 
 // Fallback to env vars if config file is missing
@@ -31,6 +27,16 @@ if (!firebaseConfig.projectId && process.env.FIREBASE_PROJECT_ID) {
     appId: process.env.FIREBASE_APP_ID,
     authDomain: process.env.FIREBASE_AUTH_DOMAIN,
     firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID
+  };
+}
+
+if (!firebaseConfig.projectId) {
+  console.warn('Firebase configuration is missing. Please provide a valid firebase-applet-config.json or set FIREBASE_PROJECT_ID environment variable.');
+  // Provide a dummy config so initializeApp doesn't crash the whole serverless function
+  firebaseConfig = {
+    projectId: 'dummy-project-id',
+    apiKey: 'dummy-api-key',
+    appId: 'dummy-app-id'
   };
 }
 

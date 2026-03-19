@@ -1,5 +1,10 @@
 {
   "cleanUrls": true,
+  "functions": {
+    "api/**/*": {
+      "includeFiles": "firebase-applet-config.json"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",

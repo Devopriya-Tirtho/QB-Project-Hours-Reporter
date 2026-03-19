@@ -1,6 +1,6 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db from './db.ts';
+import db from './db';
 import { collection, doc, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import {
   getAuthUri,
@@ -11,8 +11,8 @@ import {
   normalizeTimeActivities,
   aggregateProjectHours,
   getValidToken
-} from './quickbooks.ts';
-import { generatePdfReport, generateCsvReport } from './reports.ts';
+} from './quickbooks';
+import { generatePdfReport, generateCsvReport } from './reports';
 
 const router = express.Router();
 
@@ -240,7 +240,7 @@ router.post('/reports/generate', async (req, res) => {
     }
 
     if (formats && formats.includes('csv')) {
-      csvString = generateCsvReport(aggregated);
+      csvString = await generateCsvReport(aggregated);
     }
 
     // 4. Log history
@@ -303,7 +303,7 @@ router.post('/report', async (req, res) => {
     }
 
     if (formats && formats.includes('csv')) {
-      csvString = generateCsvReport(aggregated);
+      csvString = await generateCsvReport(aggregated);
     }
 
     // 4. Log history

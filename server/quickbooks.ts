@@ -1,5 +1,5 @@
 import axios from 'axios';
-import db from './db.ts';
+import db from './db';
 import { collection, doc, setDoc, getDocs, query, orderBy, limit, deleteDoc } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
