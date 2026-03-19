@@ -1,8 +1,6 @@
 import express from 'express';
-import cors from 'cors';
-
 import { v4 as uuidv4 } from 'uuid';
-import db from './_lib/db.ts';
+import db from './db';
 import {
   getAuthUri,
   handleCallback,
@@ -12,8 +10,8 @@ import {
   normalizeTimeActivities,
   aggregateProjectHours,
   getValidToken
-} from './_lib/quickbooks.ts';
-import { generatePdfReport, generateCsvReport } from './_lib/reports.ts';
+} from './quickbooks';
+import { generatePdfReport, generateCsvReport } from './reports';
 
 const router = express.Router();
 
@@ -358,21 +356,4 @@ router.get('/health', (req, res) => {
   res.json({ ok: true, service: "qb-project-hours-reporter" });
 });
 
-
-
-
-const app = express();
-
-app.use(cors());
-app.use(express.json());
-
-// Mount the routes at /api
-app.use('/api', router);
-
-// Global error handler for API routes
-app.use('/api', (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Unhandled API error:', err);
-  res.status(500).json({ error: err?.message || 'Internal Server Error' });
-});
-
-export default app;
+export default router;

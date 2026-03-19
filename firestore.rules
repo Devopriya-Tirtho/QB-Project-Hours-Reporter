@@ -1,15 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if the user is authenticated
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
+    // Allow read/write access to all documents for the prototype.
+    // WARNING: These rules are insecure and should be updated before production use.
     match /{document=**} {
-      // Allow read/write access only to authenticated users.
-      // WARNING: This is a basic security rule. Further hardening is recommended.
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
   }
 }

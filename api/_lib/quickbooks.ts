@@ -1,5 +1,5 @@
 import axios from 'axios';
-import db from './db';
+import db from './db.ts';
 import { v4 as uuidv4 } from 'uuid';
 
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
