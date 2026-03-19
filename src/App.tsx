@@ -154,7 +154,7 @@ export default function App() {
 
   const fetchAllProjects = async () => {
     try {
-      const res = await fetch(`/api/projects`);
+      const res = await fetch(`/api/qb/projects`);
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       setAllProjects(data);
@@ -167,7 +167,10 @@ export default function App() {
   const fetchHistory = async () => {
     try {
       const res = await fetch('/api/reports/history');
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP error! status: ${res.status}`);
+      }
       const data = await res.json();
       if (Array.isArray(data)) {
         setHistory(data);
@@ -175,8 +178,8 @@ export default function App() {
         console.error('Failed to fetch history:', data.error);
         setHistory([]);
       }
-    } catch (err) {
-      console.error('Failed to fetch history:', err);
+    } catch (err: any) {
+      console.error('Failed to fetch history:', err.message);
       setHistory([]);
     }
   };
@@ -184,7 +187,7 @@ export default function App() {
   const handleConnect = () => {
     const origin = window.location.origin;
     const authWindow = window.open(
-      `${origin}/api/qb/connect`,
+      `${origin}/api/qb/auth`,
       'oauth_popup',
       'width=600,height=700'
     );
@@ -213,7 +216,7 @@ export default function App() {
         endDate
       };
 
-      const res = await fetch('/api/report', {
+      const res = await fetch('/api/reports/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filters, formats })

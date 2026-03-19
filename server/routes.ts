@@ -1,6 +1,7 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import db from './db.ts';
+import { collection, doc, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import {
   getAuthUri,
   handleCallback,
@@ -16,6 +17,12 @@ import { generatePdfReport, generateCsvReport } from './reports.ts';
 const router = express.Router();
 
 router.get('/qb/auth', (req, res) => {
+  const url = getAuthUri();
+  res.redirect(url);
+});
+
+// Alias for frontend compatibility
+router.get('/qb/connect', (req, res) => {
   const url = getAuthUri();
   res.redirect(url);
 });
@@ -47,7 +54,8 @@ router.get('/qb/callback', async (req, res) => {
 
 router.get('/qb/status', async (req, res) => {
   try {
-    const snapshot = await db.collection('qb_tokens').orderBy('connected_at', 'desc').limit(1).get();
+    const q = query(collection(db, 'qb_tokens'), orderBy('connected_at', 'desc'), limit(1));
+    const snapshot = await getDocs(q);
     
     if (!snapshot.empty) {
       const row = snapshot.docs[0].data();
@@ -63,6 +71,16 @@ router.get('/qb/status', async (req, res) => {
 });
 
 router.get('/qb/projects', async (req, res) => {
+  try {
+    const projects = await getAllProjects();
+    res.json(projects);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Alias for frontend compatibility
+router.get('/projects', async (req, res) => {
   try {
     const projects = await getAllProjects();
     res.json(projects);
@@ -226,7 +244,7 @@ router.post('/reports/generate', async (req, res) => {
     }
 
     // 4. Log history
-    await db.collection('report_history').doc(reportId).set({
+    await setDoc(doc(db, 'report_history', reportId), {
       id: reportId,
       requested_by: 'User',
       requested_at: Date.now(),
@@ -245,7 +263,70 @@ router.post('/reports/generate', async (req, res) => {
   } catch (err: any) {
     console.error('Report generation error:', err);
     try {
-      await db.collection('report_history').doc(reportId).set({
+      await setDoc(doc(db, 'report_history', reportId), {
+        id: reportId,
+        requested_by: 'User',
+        requested_at: Date.now(),
+        filters: JSON.stringify(filters || {}),
+        status: 'Failed',
+        error_message: err?.message || String(err) || 'Unknown error'
+      });
+    } catch (dbErr) {
+      console.error('Failed to log error to db:', dbErr);
+    }
+
+    res.status(500).json({ error: err?.message || 'Internal Server Error' });
+  }
+});
+
+// Alias for frontend compatibility
+router.post('/report', async (req, res) => {
+  const { filters, formats } = req.body;
+  const reportId = uuidv4();
+  
+  try {
+    // 1. Fetch data
+    const rawData = await fetchTimeActivities(filters);
+    if (!rawData || rawData.length === 0) {
+      return res.status(404).json({ error: 'No time entries found for the selected filters.' });
+    }
+
+    // 2. Normalize and aggregate
+    const normalized = normalizeTimeActivities(rawData);
+    const aggregated = aggregateProjectHours(normalized);
+
+    // 3. Generate reports
+    let pdfBuffer, csvString;
+
+    if (formats.includes('pdf')) {
+      pdfBuffer = await generatePdfReport(aggregated, filters);
+    }
+
+    if (formats.includes('csv')) {
+      csvString = generateCsvReport(aggregated);
+    }
+
+    // 4. Log history
+    await setDoc(doc(db, 'report_history', reportId), {
+      id: reportId,
+      requested_by: 'User',
+      requested_at: Date.now(),
+      filters: JSON.stringify(filters || {}),
+      status: 'Success'
+    });
+
+    res.json({ 
+      success: true, 
+      reportId, 
+      summary: aggregated.summary,
+      pdfBase64: pdfBuffer ? pdfBuffer.toString('base64') : null,
+      csvData: csvString || null
+    });
+
+  } catch (err: any) {
+    console.error('Report generation error:', err);
+    try {
+      await setDoc(doc(db, 'report_history', reportId), {
         id: reportId,
         requested_by: 'User',
         requested_at: Date.now(),
@@ -263,12 +344,19 @@ router.post('/reports/generate', async (req, res) => {
 
 router.get('/reports/history', async (req, res) => {
   try {
-    const snapshot = await db.collection('report_history').orderBy('requested_at', 'desc').limit(50).get();
+    const q = query(collection(db, 'report_history'), orderBy('requested_at', 'desc'), limit(50));
+    const snapshot = await getDocs(q);
     const rows = snapshot.docs.map(doc => doc.data());
     res.json(rows);
   } catch (err: any) {
+    console.error('Failed to fetch history:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Health check endpoint
+router.get('/health', (req, res) => {
+  res.json({ ok: true, service: "qb-project-hours-reporter" });
 });
 
 export default router;

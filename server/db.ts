@@ -1,45 +1,45 @@
-import { initializeApp, cert, getApps, getApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { initializeApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { createRequire } from 'module';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const configPath = path.join(__dirname, '../firebase-applet-config.json');
+const require = createRequire(import.meta.url);
 let firebaseConfig: any = {};
 try {
-  firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  firebaseConfig = require('../firebase-applet-config.json');
 } catch (e) {
-  console.error('Failed to load firebase-applet-config.json', e);
-}
-
-let app;
-if (!getApps().length) {
-  const projectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-  if (projectId && clientEmail && privateKey) {
-    app = initializeApp({
-      credential: cert({
-        projectId,
-        clientEmail,
-        privateKey,
-      }),
-      projectId
-    });
-  } else if (projectId) {
-    app = initializeApp({ projectId });
-  } else {
-    app = initializeApp();
+  console.error('Failed to load firebase-applet-config.json via require', e);
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const configPath = path.join(__dirname, '../firebase-applet-config.json');
+    if (fs.existsSync(configPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    }
+  } catch (err) {
+    console.error('Failed to load firebase-applet-config.json via fs', err);
   }
-} else {
-  app = getApp();
 }
 
-const db = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId) 
+// Fallback to env vars if config file is missing
+if (!firebaseConfig.projectId && process.env.FIREBASE_PROJECT_ID) {
+  firebaseConfig = {
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    apiKey: process.env.FIREBASE_API_KEY,
+    appId: process.env.FIREBASE_APP_ID,
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+    firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID
+  };
+}
+
+const app = initializeApp(firebaseConfig);
+
+const databaseId = process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId;
+
+const db = databaseId 
+  ? getFirestore(app, databaseId) 
   : getFirestore(app);
 
 export default db;

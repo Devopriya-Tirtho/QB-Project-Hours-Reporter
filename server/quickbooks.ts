@@ -1,5 +1,6 @@
 import axios from 'axios';
 import db from './db.ts';
+import { collection, doc, setDoc, getDocs, query, orderBy, limit, deleteDoc } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
@@ -52,7 +53,7 @@ export async function handleCallback(code: string, realmId: string) {
   const { access_token, refresh_token, expires_in } = response.data;
   const token_expiry = Date.now() + (expires_in * 1000);
 
-  await db.collection('qb_tokens').doc(realmId).set({
+  await setDoc(doc(db, 'qb_tokens', realmId), {
     realmId,
     access_token,
     refresh_token,
@@ -64,7 +65,8 @@ export async function handleCallback(code: string, realmId: string) {
 }
 
 export async function getValidToken() {
-  const snapshot = await db.collection('qb_tokens').orderBy('connected_at', 'desc').limit(1).get();
+  const q = query(collection(db, 'qb_tokens'), orderBy('connected_at', 'desc'), limit(1));
+  const snapshot = await getDocs(q);
   
   if (snapshot.empty) {
     throw new Error('QuickBooks not connected');
@@ -91,7 +93,7 @@ export async function getValidToken() {
       const { access_token, refresh_token, expires_in } = response.data;
       const token_expiry = Date.now() + (expires_in * 1000);
 
-      await db.collection('qb_tokens').doc(row.realmId).set({
+      await setDoc(doc(db, 'qb_tokens', row.realmId), {
         realmId: row.realmId,
         access_token,
         refresh_token,
@@ -105,7 +107,7 @@ export async function getValidToken() {
       
       if (error.response?.data?.error === 'invalid_grant') {
         // Token is invalid, force reconnection
-        await db.collection('qb_tokens').doc(row.realmId).delete();
+        await deleteDoc(doc(db, 'qb_tokens', row.realmId));
         throw new Error('QuickBooks session expired. Please reconnect.');
       }
       
