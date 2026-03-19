@@ -20,11 +20,6 @@ router.get('/qb/auth', (req, res) => {
   res.redirect(url);
 });
 
-router.get('/qb/connect', (req, res) => {
-  const url = getAuthUri();
-  res.redirect(url);
-});
-
 router.get('/qb/callback', async (req, res) => {
   const { code, state, realmId, error } = req.query;
   if (error) {
@@ -68,15 +63,6 @@ router.get('/qb/status', async (req, res) => {
 });
 
 router.get('/qb/projects', async (req, res) => {
-  try {
-    const projects = await getAllProjects();
-    res.json(projects);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/projects', async (req, res) => {
   try {
     const projects = await getAllProjects();
     res.json(projects);
@@ -213,7 +199,7 @@ router.post('/reports/overview', async (req, res) => {
   }
 });
 
-const generateReportHandler = async (req: express.Request, res: express.Response) => {
+router.post('/reports/generate', async (req, res) => {
   const { filters, formats } = req.body;
   const reportId = uuidv4();
   
@@ -273,10 +259,7 @@ const generateReportHandler = async (req: express.Request, res: express.Response
 
     res.status(500).json({ error: err?.message || 'Internal Server Error' });
   }
-};
-
-router.post('/reports/generate', generateReportHandler);
-router.post('/report', generateReportHandler);
+});
 
 router.get('/reports/history', async (req, res) => {
   try {
@@ -286,10 +269,6 @@ router.get('/reports/history', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
-
-router.get('/health', (req, res) => {
-  res.json({ status: 'ok', environment: process.env.VERCEL_URL ? 'vercel' : 'local' });
 });
 
 export default router;
